@@ -1,13 +1,13 @@
 /*
  * kmaplib_common.cpp
- * 
- * This file contains the common utility functions that are shared across different 
- * parts of the kinetic modeling and optimization process. These include functions 
+ *
+ * This file contains the common utility functions that are shared across different
+ * parts of the kinetic modeling and optimization process. These include functions
  * for vector norms, setting and getting kinetic parameters, and convolution operations.
  */
 
 #include "kmaplib.h"
-#include "mex.h"
+// #include "mex.h"
 #include <cmath>
 #include <cstdlib>
 
@@ -114,8 +114,8 @@ void getkin(double *x0, int *xsens, int num_x, double *x)
 double vecnorm2(double *x, int num)
 {
    int      i;
-   double   temp = 0.0;  
-  
+   double   temp = 0.0;
+
    for (i = 0; i < num; i++)
       temp += x[i] * x[i];
    return sqrt(temp);
@@ -128,10 +128,9 @@ double vecnorm2(double *x, int num)
 double vecnormw(double *w, double *x, int num)
 {
    int      i;
-   double   temp = 0.0;  
-  
+   double   temp = 0.0;
+
    for (i = 0; i < num; i++)
       temp += w[i] * x[i] * x[i];
    return temp;
 }
-

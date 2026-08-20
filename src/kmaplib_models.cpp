@@ -1,22 +1,23 @@
 /*
  * kmaplib_models.cpp
- * 
- * This file contains all the kinetic modeling functions used to calculate time 
+ *
+ * This file contains all the kinetic modeling functions used to calculate time
  * activity curves (TAC) and sensitivity functions for different kinetic models.
  */
 
 #include "kmaplib.h"
-#include "mex.h"
+// #include "mex.h"
+// #include <iostream>
 
 //------------------------------------------------------------------------------
 // tac_eval
 //------------------------------------------------------------------------------
 // Evaluates the time activity curve (TAC) for the provided kinetic model parameters.
 void tac_eval(double *p, void *param, double *tac)
-{ 
+{
    KMODEL_T *par;
    par = (KMODEL_T *) param;
-   (*(par->tacfunc))(p, par->dk, par->scant, par->td, par->cp, par->wb, 
+   (*(par->tacfunc))(p, par->dk, par->scant, par->td, par->cp, par->wb,
                      par->num_frm, par->num_vox, tac);
 }
 
@@ -28,7 +29,7 @@ void jac_eval(double *p, void *param, double *tac, int *psens, double *jac)
 {
    KMODEL_T *par;
    par = (KMODEL_T *) param;
-   (*(par->jacfunc))(p, par->dk, par->scant, par->td, par->cp, par->wb, 
+   (*(par->jacfunc))(p, par->dk, par->scant, par->td, par->cp, par->wb,
                      par->num_frm, par->num_vox, tac, psens, jac);
 }
 
@@ -37,14 +38,14 @@ void jac_eval(double *p, void *param, double *tac, int *psens, double *jac)
 //------------------------------------------------------------------------------
 // Calculates the time activity curve (TAC) using the two-tissue compartment model.
 // This model uses six parameters: vb, k1, k2, k3, k4, and t_delay.
-void kconv_2tcm_tac(double *p, double dk, double *scant, double td, double *cp, 
+void kconv_2tcm_tac(double *p, double dk, double *scant, double td, double *cp,
                     double *wb, int num_frm, int num_vox, double *ct)
 {
    int      i, j;
    double   vb, k1, k2, k3, k4, t_delay;
    double   d, a1, a2, f1, f2, b1, b2, k234, tmp;
    double  *c_a1, *c_a2, *c_f, *c_b, *c_t;
-   double  *cp_delay, *wb_delay;  
+   double  *cp_delay, *wb_delay;
    int      num_time;
 
    // Memory allocation for intermediate calculations
@@ -110,28 +111,28 @@ void kconv_2tcm_tac(double *p, double dk, double *scant, double td, double *cp,
 //------------------------------------------------------------------------------
 // kconv_2tcm_jac
 //------------------------------------------------------------------------------
-// Calculate the time activity curves and the sensitivity functions 
+// Calculate the time activity curves and the sensitivity functions
 // (Jacobian) for the two-tissue compartment model.
-void kconv_2tcm_jac(double *p, double dk, double *scant, double td, double *cp, 
-                    double *wb, int num_frm, int num_vox, double *ct, int *psens, 
+void kconv_2tcm_jac(double *p, double dk, double *scant, double td, double *cp,
+                    double *wb, int num_frm, int num_vox, double *ct, int *psens,
                     double *st)
 {
    int      i, j;
    double   vb, k1, k2, k3, k4, t_delay;
    double   d, a1, a2, f1, f2, b1, b2, k234, tmp;
    double  *c_a1, *c_a2, *c_f, *c_b, *c_t, *s_t;
-   double  *wb_delay, *cp_delay;       
-   double  *cp_grad_delay, *wb_grad_delay;                          
+   double  *wb_delay, *cp_delay;
+   double  *cp_grad_delay, *wb_grad_delay;
    int      num_time;
    int      num_par;
-  
+
    // Determine the number of sensitive parameters
    num_par = 0;
    for (i = 0; i < 6; i++) {
       if (psens[i] == 1)
          ++num_par;
    }
-  
+
    // Allocate memory for intermediate calculations
    num_time = (int) (scant[2*num_frm-1] / td);
    c_a1 = (double*) malloc(sizeof(double) * num_time);
@@ -142,7 +143,7 @@ void kconv_2tcm_jac(double *p, double dk, double *scant, double td, double *cp,
    // shift cp, wb for time delay
    wb_delay  = (double*) malloc(sizeof(double)*num_time);
    cp_delay  = (double*) malloc(sizeof(double)*num_time);
-	
+
    c_t  = (double*) malloc(sizeof(double) * num_time);
    s_t  = (double*) malloc(sizeof(double) * num_time * num_par);
    cp_grad_delay  = (double*) malloc(sizeof(double)*num_time);
@@ -150,7 +151,7 @@ void kconv_2tcm_jac(double *p, double dk, double *scant, double td, double *cp,
 
    // Iterate over each voxel
    for (j = 0; j < num_vox; j++) {
-	
+
       // Transform kinetic parameters into exponential parameters
       vb = p[0 + j * 6];
       k1 = p[1 + j * 6];
@@ -163,7 +164,7 @@ void kconv_2tcm_jac(double *p, double dk, double *scant, double td, double *cp,
       d = sqrt(k234 * k234 - 4 * k2 * k4);
       a1 = (k234 - d) / 2;
       a2 = (k234 + d) / 2;
-      
+
       // cp, wb with time delay
       time_delay_tac(wb, num_time, t_delay, td, wb_delay);
       time_delay_tac(cp, num_time, t_delay, td, cp_delay);
@@ -179,7 +180,7 @@ void kconv_2tcm_jac(double *p, double dk, double *scant, double td, double *cp,
       f1 = k1 / d * (k4 - a1);
       f2 = k1 / d * (a2 - k4);
       b1 = k1 / d * k3;
-      b2 = -b1;	
+      b2 = -b1;
       for (i = 0; i < num_time; i++) {
          c_f[i] = f1 * c_a1[i] + f2 * c_a2[i];
          c_b[i] = b1 * c_a1[i] + b2 * c_a2[i];
@@ -192,7 +193,7 @@ void kconv_2tcm_jac(double *p, double dk, double *scant, double td, double *cp,
             s_t[i] = - (c_f[i] + c_b[i]) + wb_delay[i];
          s_t += num_time;
       }
-      if (psens[1] == 1 || psens[2] == 1) { 
+      if (psens[1] == 1 || psens[2] == 1) {
          f1 = 1 / d * (k4 + k3 - a1);
          f2 = 1 / d * (a2 - k4 - k3);
       }
@@ -201,7 +202,7 @@ void kconv_2tcm_jac(double *p, double dk, double *scant, double td, double *cp,
             s_t[i] = (1 - vb) * (f1 * c_a1[i] + f2 * c_a2[i]);
          s_t += num_time;
       }
-      if (psens[2] == 1 || psens[3] == 1) { 
+      if (psens[2] == 1 || psens[3] == 1) {
          tmp = a1 + dk;
          kconv_exp(1.0, tmp, c_f, num_time, td, c_a1);
          tmp = a2 + dk;
@@ -212,7 +213,7 @@ void kconv_2tcm_jac(double *p, double dk, double *scant, double td, double *cp,
             s_t[i] = -(1 - vb) * (f1 * c_a1[i] + f2 * c_a2[i]);
          s_t += num_time;
       }
-      if (psens[3] == 1 || psens[4] == 1) { 
+      if (psens[3] == 1 || psens[4] == 1) {
          f1 = 1 / d * (a1 + a2 - k3 - k4);
          f2 = -f1;
       }
@@ -240,13 +241,13 @@ void kconv_2tcm_jac(double *p, double dk, double *scant, double td, double *cp,
          f1 = k1 / d * (k4 - a1);
          f2 = k1 / d * (a2 - k4);
          b1 = k1 / d * k3;
-         b2 = -b1;	
-	 for (i=0; i<num_time; i++){ 
+         b2 = -b1;
+	 for (i=0; i<num_time; i++){
             c_f[i] = f1 * c_a1[i] + f2 * c_a2[i];
             c_b[i] = b1 * c_a1[i] + b2 * c_a2[i];
             s_t[i] = (1 - vb) * (c_f[i] + c_b[i]) + vb *wb_grad_delay[i];
             s_t[i] = - s_t[i];
-         } 
+         }
 	 s_t += num_time;
       }
 
@@ -256,7 +257,7 @@ void kconv_2tcm_jac(double *p, double dk, double *scant, double td, double *cp,
       frame(scant, td, c_t, num_frm, 1, ct + j * num_frm);
       frame(scant, td, s_t, num_frm, num_par, st + j * num_frm * num_par);
    }
-  	
+
    // Free allocated memory
    free(c_a1);
    free(c_a2);
@@ -275,14 +276,14 @@ void kconv_2tcm_jac(double *p, double dk, double *scant, double td, double *cp,
 //------------------------------------------------------------------------------
 // Calculates the time activity curve (TAC) using the one-tissue compartment model.
 // This model uses four parameters: vb, k1, k2, and t_delay.
-void kconv_1tcm_tac(double *p, double dk, double *scant, double td, double *cp, 
+void kconv_1tcm_tac(double *p, double dk, double *scant, double td, double *cp,
                     double *wb, int num_frm, int num_vox, double *ct)
 {
    int      i, j;
    double   vb, k1, k2, t_delay;
    double   a;
    double  *c_a, *c_t;
-   double  *cp_delay, *wb_delay;      
+   double  *cp_delay, *wb_delay;
    int      num_time;
 
    // Memory allocation
@@ -324,18 +325,18 @@ void kconv_1tcm_tac(double *p, double dk, double *scant, double td, double *cp,
 //------------------------------------------------------------------------------
 // kconv_1tcm_jac
 //------------------------------------------------------------------------------
-// Calculates the time activity curves and the sensitivity functions for the 
+// Calculates the time activity curves and the sensitivity functions for the
 // one-tissue kinetic model.
-void kconv_1tcm_jac(double *p, double dk, double *scant, double td, double *cp, 
-                    double *wb, int num_frm, int num_vox, double *ct, int *psens, 
+void kconv_1tcm_jac(double *p, double dk, double *scant, double td, double *cp,
+                    double *wb, int num_frm, int num_vox, double *ct, int *psens,
                     double *st)
 {
    int      i, j;
    double   vb, k1, k2, t_delay;
    double   a;
    double  *c_a, *c_t, *s_t;
-   double  *cp_delay, *wb_delay;  
-   double  *cp_grad_delay, *wb_grad_delay;                         
+   double  *cp_delay, *wb_delay;
+   double  *cp_grad_delay, *wb_grad_delay;
    int      num_time;
    int      num_par;
 
@@ -356,6 +357,10 @@ void kconv_1tcm_jac(double *p, double dk, double *scant, double td, double *cp,
    cp_grad_delay  = (double*) malloc(sizeof(double)*num_time);
    wb_grad_delay  = (double*) malloc(sizeof(double)*num_time);
 
+   // for (i = 0; i < num_time; i++){
+   //    std :: cout << "i = " << i << ", cp[i] = " << cp[i] << std :: endl;
+   // }
+
    // Iterate over each voxel
    for (j = 0; j < num_vox; j++) {
 
@@ -364,10 +369,16 @@ void kconv_1tcm_jac(double *p, double dk, double *scant, double td, double *cp,
       k1 = p[1 + j * 4];
       k2 = p[2 + j * 4];
       t_delay = p[3 + j * 4];
+      // std :: cout << vb << " - " <<  k1 << " - " << k2 << " - " << t_delay << std :: endl;
 
       // shift cp, wb for time delay
       time_delay_tac(cp, num_time, t_delay, td, cp_delay);
       time_delay_tac(wb, num_time, t_delay, td, wb_delay);
+      // std :: cout << "td = " << td << std :: endl;
+      // for (int z=0; z<num_time; ++z) {
+      //   std :: cout << (cp[z]==cp_delay[z]) << std :: endl;
+      //   std :: cout << (wb[z]==wb_delay[z]) << std :: endl;
+      // }
 
       // Calculate the exponential component
       a = k2 + dk;
@@ -376,6 +387,7 @@ void kconv_1tcm_jac(double *p, double dk, double *scant, double td, double *cp,
       // Calculate the time activity curve
       for (i = 0; i < num_time; i++){
          c_t[i] = (1 - vb) * c_a[i] + vb * wb_delay[i];
+         // std :: cout << "i = " << i << "cp_delay[i] = " << cp_delay[i] << " c_a[i] = " << c_a[i] << " c_t[i] = " << c_t[i] << std :: endl;
       }
 
       // Calculate sensitivity functions
@@ -400,13 +412,14 @@ void kconv_1tcm_jac(double *p, double dk, double *scant, double td, double *cp,
          time_delay_jac(wb_delay, num_time, td, wb_grad_delay);
          a = k2 + dk;
          kconv_exp(k1, a, cp_grad_delay, num_time, td, c_a);
-	      for (i=0; i<num_time; i++){ 
+	      for (i=0; i<num_time; i++){
             s_t[i] = (1 - vb) * c_a[i] + vb * wb_grad_delay[i];
             s_t[i] = - s_t[i];
-         } 
-	 s_t += num_time;
+         }
+	       s_t += num_time;
       }
       s_t -= num_time * num_par;
+      // std :: cout << "s_t = " << s_t << std :: endl;
 
       // Average the sensitivity functions over the frame duration
       frame(scant, td, c_t, num_frm, 1, ct + j * num_frm);
@@ -426,25 +439,25 @@ void kconv_1tcm_jac(double *p, double dk, double *scant, double td, double *cp,
 //------------------------------------------------------------------------------
 // kconv_liver_tac
 //------------------------------------------------------------------------------
-// Calculates the time activity curve using the two-tissue kinetic model with 
-// a dual-blood input function model for the liver. 
+// Calculates the time activity curve using the two-tissue kinetic model with
+// a dual-blood input function model for the liver.
 /* More details of the model are referred to the references:
-   [1] Wang GB, Corwin MT, Olson KA, Badawi RD, Sarkar S. Dynamic PET of human 
-   liver inflammation: impact of kinetic modeling with optimization-derived dual- 
+   [1] Wang GB, Corwin MT, Olson KA, Badawi RD, Sarkar S. Dynamic PET of human
+   liver inflammation: impact of kinetic modeling with optimization-derived dual-
     blood input function. Physics in Medicine and Biology, 63(15): 155004 (14pp),
     2018.
-   [2] Zuo Y, Sarkar S, Corwin MT, Olson K, Badawi RD, Wang GB. Structural and 
-   practical identifiability of dual-input kinetic modeling in dynamic PET of liver 
+   [2] Zuo Y, Sarkar S, Corwin MT, Olson K, Badawi RD, Wang GB. Structural and
+   practical identifiability of dual-input kinetic modeling in dynamic PET of liver
    inflammation. Physics in Medicine and Biology,  64(17): 175023 (18pp),  2019.
 */
-void kconv_liver_tac(double *p, double dk, double *scant, double td, double *ca, 
+void kconv_liver_tac(double *p, double dk, double *scant, double td, double *ca,
                     double *wb, int num_frm, int num_vox, double *ct)
 {
    int      i, j;
    double   vb, k1, k2, k3, k4, ka, fa, t_delay;
    double   d, a1, a2, f1, f2, b1, b2, k234, tmp;
    double   *c_pv, *cp, *c_a1, *c_a2, *c_f, *c_b, *c_t;
-   double   *ca_delay, *wb_delay;              
+   double   *ca_delay, *wb_delay;
    int      num_time;
 
    // Allocate memory for intermediate calculations
@@ -526,8 +539,8 @@ void kconv_liver_tac(double *p, double dk, double *scant, double td, double *ca,
 //------------------------------------------------------------------------------
 // Calculates the time activity curves and sensitivity functions using the
 // two-tissue compartment model with a dual-blood input function for the liver.
-void kconv_liver_jac(double *p, double dk, double *scant, double td, double *ca, 
-                    double *wb, int num_frm, int num_vox, double *ct, int *psens, 
+void kconv_liver_jac(double *p, double dk, double *scant, double td, double *ca,
+                    double *wb, int num_frm, int num_vox, double *ct, int *psens,
                     double *st)
 {
    int      i, j;
@@ -615,7 +628,7 @@ void kconv_liver_jac(double *p, double dk, double *scant, double td, double *ca,
             s_t[i] = - (c_f[i] + c_b[i]) + cp[i];
          s_t += num_time;
       }
-      if (psens[1] == 1 || psens[2] == 1) { 
+      if (psens[1] == 1 || psens[2] == 1) {
          f1 = 1 / d * (k4 + k3 - a1);
          f2 = 1 / d * (a2 - k4 - k3);
       }
@@ -624,7 +637,7 @@ void kconv_liver_jac(double *p, double dk, double *scant, double td, double *ca,
             s_t[i] = (1 - vb) * (f1 * c_a1[i] + f2 * c_a2[i]);
          s_t += num_time;
       }
-      if (psens[2] == 1 || psens[3] == 1) { 
+      if (psens[2] == 1 || psens[3] == 1) {
          tmp = a1 + dk;
          kconv_exp(1.0, tmp, c_f, num_time, td, c_a1);
          tmp = a2 + dk;
@@ -635,7 +648,7 @@ void kconv_liver_jac(double *p, double dk, double *scant, double td, double *ca,
             s_t[i] = -(1 - vb) * (f1 * c_a1[i] + f2 * c_a2[i]);
          s_t += num_time;
       }
-      if (psens[3] == 1 || psens[4] == 1) { 
+      if (psens[3] == 1 || psens[4] == 1) {
          f1 = 1 / d * (a1 + a2 - k3 - k4);
          f2 = -f1;
       }
@@ -653,7 +666,7 @@ void kconv_liver_jac(double *p, double dk, double *scant, double td, double *ca,
             s_t[i] = -(1 - vb) * (f1 * c_a1[i] + f2 * c_a2[i]);
          s_t += num_time;
       }
-      if (psens[5] == 1 || psens[6] == 1) { 
+      if (psens[5] == 1 || psens[6] == 1) {
          for (i = 0; i < num_time; i++) {
             cp[i] = ca_delay[i] - c_pv[i];
          }
@@ -705,12 +718,12 @@ void kconv_liver_jac(double *p, double dk, double *scant, double td, double *ca,
          b1 = k1 / d * k3;
          b2 = -b1;
 
-	 for (i=0; i<num_time; i++){ 
+	 for (i=0; i<num_time; i++){
             c_f[i] = f1 * c_a1[i] + f2 * c_a2[i];
             c_b[i] = b1 * c_a1[i] + b2 * c_a2[i];
             s_t[i] = (1 - vb) * (c_f[i] + c_b[i]) + vb * cp[i];
             s_t[i] = - s_t[i];
-         } 
+         }
 	 s_t += num_time;
       }
       s_t -= num_time * num_par;
@@ -735,4 +748,3 @@ void kconv_liver_jac(double *p, double dk, double *scant, double td, double *ca,
 }
 
 //------------------------------------------------------------------------------
-
