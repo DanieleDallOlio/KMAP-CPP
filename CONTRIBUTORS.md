@@ -1,4 +1,8 @@
-## Contributors
+## KMAP-CPP maintenance and extensions
+
+- Daniele Dall'Olio — University of Bologna
+  
+## KMAP-C Contributors
 
 | Name           | Contributions                                | GitHub Profile                               |
 |----------------|---------------------------------------------|---------------------------------------------|
