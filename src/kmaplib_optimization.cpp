@@ -379,7 +379,6 @@ void kmap_levmar_stats(
          setkin(pest, num_par, psens, pinit);
          (*func)(pinit, param, ct);
          if (stx && kmap_isnan(ct[0])) stx->nan_ct++;
-         std :: cout << "second break" << std :: endl;
          break;
       }
    }
