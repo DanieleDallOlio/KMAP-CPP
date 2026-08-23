@@ -46,13 +46,13 @@ double* finesample(double** & scant,
                    std :: vector < std :: vector <double> > & blood,
                    long int N,
                    long int & Nint,
-                   long int res = 1L,
+                   double res = 1L,
                    const std::string & itype = "linear");
 
 double* finesample2(const std::vector<double*>& scant,
                    const std::vector<double>& blood,
                    long int& Nint,
-                   long int res,
+                   double res,
                    const std::string& itype);
 
 #endif // __utils_h__

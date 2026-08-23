@@ -51,7 +51,7 @@ double* finesample(double** & scant,
                    std :: vector < std :: vector <double> > & blood,
                    long int N,
                    long int & Nint,
-                   long int res,
+                   double res,
                    const std::string & itype)
 {
     // Create the time vectors
@@ -132,7 +132,7 @@ double* finesample2(
     const std::vector<double*>& scant,  // [Nframe][2] start/end times
     const std::vector<double>& blood,               // [Nframe]
     long int& Nint,
-    long int res,
+    double res,
     const std::string& itype)
 {
     const long int N = static_cast<long int>(scant.size());
