@@ -272,22 +272,10 @@ endif()
 if(OMP)
 
   find_package(
-    OpenMP
+    OpenMP 2.0
     REQUIRED
     COMPONENTS CXX
   )
-
-  if(
-    DEFINED OpenMP_CXX_VERSION
-    AND OpenMP_CXX_VERSION VERSION_LESS "4.5"
-  )
-
-    message(
-      FATAL_ERROR
-      "OpenMP is too old. Required OpenMP >= 4.5."
-    )
-
-  endif()
 
   target_link_libraries(
     ${kmaplib}
