@@ -209,15 +209,6 @@ if(
         DEBUG
     )
 
-  elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
-
-    # Preserve behavior close to the previous KMAP-PY build.
-    target_compile_options(
-      ${kmaplib}
-      PRIVATE
-        -Ofast
-    )
-
   endif()
 
 endif()
@@ -244,7 +235,6 @@ if(MSVC)
       /wd4477
       /wd4996
       /wd4819
-      /fp:fast
   )
 
   target_compile_definitions(
