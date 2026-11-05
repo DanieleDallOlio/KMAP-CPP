@@ -42,6 +42,17 @@ typedef struct {
                     // function pointer for Jacobian calculation (sensitivity functions)
 } KMODEL_T;
 
+// Solver status describes numerical outcome; model selection is performed later.
+// A finite candidate may exist without confirmed optimizer convergence.
+enum KmapTerminationReason {
+  KMAP_TERMINATION_UNKNOWN = 0,
+  KMAP_TERMINATION_SMALL_STEP = 1,
+  KMAP_TERMINATION_NEGLIGIBLE_IMPROVEMENT = 2,
+  KMAP_TERMINATION_ITERATION_LIMIT = 3,
+  KMAP_TERMINATION_STALLED = 4,
+  KMAP_TERMINATION_INVALID_BASELINE = 5
+};
+
 struct LevmarStats
 {
   int n_loops   = 0;   // total while-loop passes
@@ -52,6 +63,11 @@ struct LevmarStats
   int nan_st    = 0;   // NaN observed in st
   double last_rho = 0.0;
   double last_mu  = 0.0;
+  int finite_candidate = 0; // a finite evaluated parameter/prediction pair exists
+  int converged = 0;        // reached small-step criterion
+  int termination_reason = KMAP_TERMINATION_UNKNOWN;
+  int numerical_jacobian_fallbacks = 0;
+  int clamped_initial_parameters = 0;
 };
 
 // NaN test that works everywhere and is cheap

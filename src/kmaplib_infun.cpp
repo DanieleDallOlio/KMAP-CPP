@@ -6,8 +6,10 @@
  */
 
 #include "kmaplib.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #define min(a,b) (a < b ? a : b)
 
 //------------------------------------------------------------------------------
@@ -26,9 +28,29 @@ void time_delay_tac(double* tac, int tac_size, double delay_time, double td, dou
    Created by Yiran Wang, 2023;
    Modified by Yansong Zhu @ UC Davis, 2024
 */
-   double shiftAmount = delay_time/td;
+   if (!tac || !out || tac_size <= 0)
+      return;
+
+   const double shiftAmount = delay_time / td;
+   if (!std::isfinite(delay_time) || !std::isfinite(td) || td <= 0.0 ||
+       !std::isfinite(shiftAmount)) {
+      // Invalid candidate: propagate a non-finite model prediction, never
+      // convert NaN/Inf to an integer index or access past the buffer.
+      std::fill_n(out, tac_size, std::numeric_limits<double>::quiet_NaN());
+      return;
+   }
+   if (shiftAmount >= static_cast<double>(tac_size)) {
+      std::fill_n(out, tac_size, 0.0);
+      return;
+   }
+   if (shiftAmount <= -static_cast<double>(tac_size)) {
+      std::fill_n(out, tac_size, tac[tac_size - 1]);
+      return;
+   }
+
+   // Ordinary finite shifts retain the existing interpolation exactly.
    double fraction = shiftAmount - floor(shiftAmount);
-   int shift = floor(shiftAmount);
+   int shift = static_cast<int>(floor(shiftAmount));
    // Handling right shift
    if (shift >= 0) {
       int x1;
@@ -75,6 +97,11 @@ void time_delay_tac(double* tac, int tac_size, double delay_time, double td, dou
 // compute gradient for time delay correction
 void time_delay_jac(double *tac, int tac_size, double td, double *out)
 {
+   if (!out || !tac || tac_size <= 0) return;
+   if (!std::isfinite(td) || td <= 0.0) {
+      std::fill_n(out, tac_size, std::numeric_limits<double>::quiet_NaN());
+      return;
+   }
 /*
    tac: time activity curve
    tac_size: number of frames

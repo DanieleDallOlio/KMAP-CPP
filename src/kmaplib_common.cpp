@@ -10,6 +10,9 @@
 // #include "mex.h"
 #include <cmath>
 #include <cstdlib>
+#include <algorithm>
+#include <climits>
+#include <limits>
 
 
 //------------------------------------------------------------------------------
@@ -24,12 +27,53 @@ void frame(double *scant, double td, double *c_t, int num_frm, int num_c, double
    int      num_time;
    int      j, jstart, jend;
 
-   num_time = (int) (scant[2*num_frm-1] / td);
+   if (!scant || !c_t || !ct || num_frm <= 0 || num_c <= 0 ||
+       !std::isfinite(td) || td <= 0.0 ||
+       !std::isfinite(scant[2*num_frm-1]) ||
+       scant[2*num_frm-1] / td < 1.0 ||
+       scant[2*num_frm-1] / td >= static_cast<double>(INT_MAX)) {
+      // Caller must provide a valid, sampled time grid. Never divide by zero
+      // or index outside a buffer on a malformed acquisition.
+      if (ct && num_frm > 0 && num_c > 0)
+         std::fill_n(ct, num_frm * num_c, std::numeric_limits<double>::quiet_NaN());
+      return;
+   }
+   num_time = static_cast<int>(scant[2*num_frm-1] / td);
 
    for (m = 0; m < num_frm; m++) {
-      jstart = (int) (scant[m] / td);
-      jend = (int) (scant[m + num_frm] / td);
-      dt = (double) (jend - jstart);
+      const double start = scant[m];
+      const double end = scant[m + num_frm];
+      if (!std::isfinite(start) || !std::isfinite(end) || start < 0.0 ||
+          end <= start || end > scant[2*num_frm-1] ||
+          end / td >= static_cast<double>(INT_MAX)) {
+         for (k = 0; k < num_c; ++k)
+            ct[m + k * num_frm] = std::numeric_limits<double>::quiet_NaN();
+         continue;
+      }
+      jstart = static_cast<int>(start / td);
+      jend = static_cast<int>(end / td);
+      if (jstart < 0 || jend > num_time) {
+         for (k = 0; k < num_c; ++k)
+            ct[m + k * num_frm] = std::numeric_limits<double>::quiet_NaN();
+         continue;
+      }
+      dt = static_cast<double>(jend - jstart);
+      if (jend == jstart) {
+         // Frame shorter than the integration grid (including its final
+         // partial cell): interpolate at its
+         // midpoint instead of computing 0/0. This is a numerical sampling
+         // approximation; for quantitative short frames use a finer td.
+         const double position = std::max(0.0, std::min(
+             static_cast<double>(num_time - 1), (start + end)/(2.0*td) - 0.5));
+         const int left = static_cast<int>(position);
+         const int right = std::min(num_time - 1, left + 1);
+         const double fraction = position - left;
+         for (k = 0; k < num_c; ++k) {
+            ct[m + k * num_frm] = (1.0 - fraction) * c_t[left + k*num_time]
+                + fraction * c_t[right + k*num_time];
+         }
+         continue;
+      }
       for (k = 0; k < num_c; k++) {
          tmp = 0.0;
          for (j = jstart; j < jend; j++) {

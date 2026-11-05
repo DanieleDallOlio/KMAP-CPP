@@ -6,6 +6,9 @@
  */
 
 #include "kmaplib.h"
+#include <algorithm>
+#include <cmath>
+#include <vector>
 // #include "mex.h"
 // #include <iostream>
 
@@ -33,6 +36,52 @@ void jac_eval(double *p, void *param, double *tac, int *psens, double *jac)
                      par->num_frm, par->num_vox, tac, psens, jac);
 }
 
+// Stable eigenvalue separation for nonnegative two-tissue rate constants.
+static double kmap_2t_separation(double k2, double k3, double k4)
+{
+   const double difference = k2 - k4;
+   return std::sqrt(difference * difference + k3 * (k3 + 2.0 * (k2 + k4)));
+}
+
+// Use the existing forward model to evaluate bounded difference quotients
+// only where the analytic repeated-root Jacobian has indeterminate 1/d terms.
+static void kmap_boundary_jacobian(
+   void (*forward)(double*,double,double*,double,double*,double*,int,int,double*),
+   double *parameters, int nparameters, int *sensitive,
+   double dk, double *scan, double td, double *plasma, double *blood,
+   int nframes, double *prediction, double *jacobian, int fractionIndex)
+{
+   std::vector<double> trial(parameters, parameters + nparameters);
+   std::vector<double> base(nframes), plus(nframes), minus(nframes);
+   forward(trial.data(), dk, scan, td, plasma, blood, nframes, 1, base.data());
+   std::copy(base.begin(), base.end(), prediction);
+   int column = 0;
+   for (int j = 0; j < nparameters; ++j) {
+      if (sensitive[j] != 1) continue;
+      const double current = parameters[j];
+      const double step = 1e-6 * std::max(1.0, std::fabs(current));
+      const bool canMinus = current >= step;
+      const bool canPlus = (j != 0 && j != fractionIndex) ||
+                           (current + step <= 1.0);
+      if (canPlus) {
+         trial[j] = current + step;
+         forward(trial.data(), dk, scan, td, plasma, blood, nframes, 1, plus.data());
+      }
+      if (canMinus) {
+         trial[j] = current - step;
+         forward(trial.data(), dk, scan, td, plasma, blood, nframes, 1, minus.data());
+      }
+      trial[j] = current;
+      for (int i = 0; i < nframes; ++i) {
+         jacobian[i + column * nframes] = (canMinus && canPlus)
+             ? (plus[i] - minus[i]) / (2.0 * step)
+             : (canPlus ? (plus[i] - base[i]) / step
+                        : (canMinus ? (base[i] - minus[i]) / step : 0.0));
+      }
+      ++column;
+   }
+}
+
 //------------------------------------------------------------------------------
 // kconv_2tcm_tac
 //------------------------------------------------------------------------------
@@ -50,13 +99,17 @@ void kconv_2tcm_tac(double *p, double dk, double *scant, double td, double *cp,
 
    // Memory allocation for intermediate calculations
    num_time = (int) (scant[2*num_frm-1]/td);
-   c_a1 = (double*) malloc(sizeof(double)*num_time);
-   c_a2 = (double*) malloc(sizeof(double)*num_time);
-   c_f  = (double*) malloc(sizeof(double)*num_time);
-   c_b  = (double*) malloc(sizeof(double)*num_time);
-   c_t  = (double*) malloc(sizeof(double)*num_time);
-   cp_delay = (double*) malloc(sizeof(double)*num_time);
-   wb_delay = (double*) malloc(sizeof(double)*num_time);
+
+   // Reuse scratch across independent voxel fits on this worker thread.
+   thread_local std::vector<double> scratch;
+   scratch.resize(static_cast<size_t>(num_time) * (7));
+   c_a1 = scratch.data() + (0);
+   c_a2 = scratch.data() + (0 + num_time);
+   c_f = scratch.data() + (0 + num_time + num_time);
+   c_b = scratch.data() + (0 + num_time + num_time + num_time);
+   c_t = scratch.data() + (0 + num_time + num_time + num_time + num_time);
+   cp_delay = scratch.data() + (0 + num_time + num_time + num_time + num_time + num_time);
+   wb_delay = scratch.data() + (0 + num_time + num_time + num_time + num_time + num_time + num_time);
 
    for (j=0; j<num_vox; j++) {
       // Parameter transformations
@@ -67,7 +120,7 @@ void kconv_2tcm_tac(double *p, double dk, double *scant, double td, double *cp,
       k4 = p[4+j*6];
       t_delay = p[5+j*6];
       k234 = k2+k3+k4;
-      d = sqrt(k234*k234 - 4*k2*k4);
+      d = kmap_2t_separation(k2, k3, k4);
       a1 = (k234 - d) / 2;
       a2 = (k234 + d) / 2;
 
@@ -82,15 +135,27 @@ void kconv_2tcm_tac(double *p, double dk, double *scant, double td, double *cp,
       kconv_exp(1.0, tmp, cp_delay, num_time, td, c_a2);
 
       // Compute compartmental TACs
-      if (d==0) d = 1e9;
+      // For coincident rates, the tissue response is the repeated-root
+      // limit. Retain the established evaluation path for ordinary rates.
+      if (d < 1e-5) {
+         const double beta = (d > 0.0) ? (k3 + k4 - k2) / d : 0.0;
+         const double weight1 = 0.5 * (1.0 + beta);
+         for (i = 0; i < num_time; ++i) {
+            c_f[i] = k1 * (weight1 * c_a1[i] + (1.0 - weight1) * c_a2[i]);
+            c_b[i] = 0.0;
+         }
+      } else {
       f1 = k1/d * (k4 - a1);
       f2 = k1/d * (a2 - k4);
       b1 = k1/d * k3;
       b2 = -b1;
 
-      for (i=0; i<num_time; i++) {
-         c_f[i] = f1*c_a1[i] + f2*c_a2[i];
-         c_b[i] = b1*c_a1[i] + b2*c_a2[i];
+         for (i = 0; i < num_time; ++i) {
+            c_f[i] = f1 * c_a1[i] + f2 * c_a2[i];
+            c_b[i] = b1 * c_a1[i] + b2 * c_a2[i];
+         }
+      }
+      for (i = 0; i < num_time; ++i) {
          c_t[i] = (1 - vb) * (c_f[i] + c_b[i]) + vb * wb_delay[i];
       }
 
@@ -98,14 +163,7 @@ void kconv_2tcm_tac(double *p, double dk, double *scant, double td, double *cp,
       frame(scant, td, c_t, num_frm, 1, ct + j * num_frm);
    }
 
-   // Free allocated memory
-   free(c_a1);
-   free(c_a2);
-   free(c_f);
-   free(c_b);
-   free(c_t);
-   free(cp_delay);
-   free(wb_delay);
+
 }
 
 //------------------------------------------------------------------------------
@@ -135,19 +193,20 @@ void kconv_2tcm_jac(double *p, double dk, double *scant, double td, double *cp,
 
    // Allocate memory for intermediate calculations
    num_time = (int) (scant[2*num_frm-1] / td);
-   c_a1 = (double*) malloc(sizeof(double) * num_time);
-   c_a2 = (double*) malloc(sizeof(double) * num_time);
-   c_f  = (double*) malloc(sizeof(double) * num_time);
-   c_b  = (double*) malloc(sizeof(double) * num_time);
 
-   // shift cp, wb for time delay
-   wb_delay  = (double*) malloc(sizeof(double)*num_time);
-   cp_delay  = (double*) malloc(sizeof(double)*num_time);
-
-   c_t  = (double*) malloc(sizeof(double) * num_time);
-   s_t  = (double*) malloc(sizeof(double) * num_time * num_par);
-   cp_grad_delay  = (double*) malloc(sizeof(double)*num_time);
-   wb_grad_delay  = (double*) malloc(sizeof(double)*num_time);
+   // Reuse scratch across independent voxel fits on this worker thread.
+   thread_local std::vector<double> scratch;
+   scratch.resize(static_cast<size_t>(num_time) * (9 + num_par));
+   c_a1 = scratch.data() + (0);
+   c_a2 = scratch.data() + (0 + num_time);
+   c_f = scratch.data() + (0 + num_time + num_time);
+   c_b = scratch.data() + (0 + num_time + num_time + num_time);
+   wb_delay = scratch.data() + (0 + num_time + num_time + num_time + num_time);
+   cp_delay = scratch.data() + (0 + num_time + num_time + num_time + num_time + num_time);
+   c_t = scratch.data() + (0 + num_time + num_time + num_time + num_time + num_time + num_time);
+   s_t = scratch.data() + (0 + num_time + num_time + num_time + num_time + num_time + num_time + num_time);
+   cp_grad_delay = scratch.data() + (0 + num_time + num_time + num_time + num_time + num_time + num_time + num_time + num_time * num_par);
+   wb_grad_delay = scratch.data() + (0 + num_time + num_time + num_time + num_time + num_time + num_time + num_time + num_time * num_par + num_time);
 
    // Iterate over each voxel
    for (j = 0; j < num_vox; j++) {
@@ -161,9 +220,18 @@ void kconv_2tcm_jac(double *p, double dk, double *scant, double td, double *cp,
       t_delay = p[5+j*6];
 
       k234 = k2 + k3 + k4;
-      d = sqrt(k234 * k234 - 4 * k2 * k4);
+      d = kmap_2t_separation(k2, k3, k4);
       a1 = (k234 - d) / 2;
       a2 = (k234 + d) / 2;
+
+      // Singular analytic coefficients at repeated roots are evaluated by
+      // finite differences of the same forward model, only at this boundary.
+      if (d < 1e-5) {
+         kmap_boundary_jacobian(kconv_2tcm_tac, p + j * 6, 6, psens,
+            dk, scant, td, cp, wb, num_frm,
+            ct + j * num_frm, st + j * num_frm * num_par, -1);
+         continue;
+      }
 
       // cp, wb with time delay
       time_delay_tac(wb, num_time, t_delay, td, wb_delay);
@@ -258,17 +326,8 @@ void kconv_2tcm_jac(double *p, double dk, double *scant, double td, double *cp,
       frame(scant, td, s_t, num_frm, num_par, st + j * num_frm * num_par);
    }
 
-   // Free allocated memory
-   free(c_a1);
-   free(c_a2);
-   free(c_f);
-   free(c_b);
-   free(cp_delay);
-   free(wb_delay);
-   free(cp_grad_delay);
-   free(wb_grad_delay);
-   free(c_t);
-   free(s_t);
+
+
 }
 
 //------------------------------------------------------------------------------
@@ -288,11 +347,14 @@ void kconv_1tcm_tac(double *p, double dk, double *scant, double td, double *cp,
 
    // Memory allocation
    num_time = (int) (scant[2*num_frm-1]/td);
-   c_a = (double*) malloc(sizeof(double)*num_time);
-   c_t = (double*) malloc(sizeof(double)*num_time);
 
-   cp_delay = (double*) malloc(sizeof(double)*num_time);
-   wb_delay = (double*) malloc(sizeof(double)*num_time);
+   // Reuse scratch across independent voxel fits on this worker thread.
+   thread_local std::vector<double> scratch;
+   scratch.resize(static_cast<size_t>(num_time) * (4));
+   c_a = scratch.data() + (0);
+   c_t = scratch.data() + (0 + num_time);
+   cp_delay = scratch.data() + (0 + num_time + num_time);
+   wb_delay = scratch.data() + (0 + num_time + num_time + num_time);
 
    for (j = 0; j < num_vox; j++) {
       // Assign parameters
@@ -315,11 +377,7 @@ void kconv_1tcm_tac(double *p, double dk, double *scant, double td, double *cp,
       frame(scant, td, c_t, num_frm, 1, ct + j * num_frm);
    }
 
-   // Free allocated memory
-   free(c_a);
-   free(c_t);
-   free(cp_delay);
-   free(wb_delay);
+
 }
 
 //------------------------------------------------------------------------------
@@ -348,14 +406,17 @@ void kconv_1tcm_jac(double *p, double dk, double *scant, double td, double *cp,
 
    // Allocate memory for intermediate calculations
    num_time = (int) (scant[2*num_frm-1] / td);
-   c_a = (double*) malloc(sizeof(double) * num_time);
-   c_t = (double*) malloc(sizeof(double) * num_time);
-   s_t = (double*) malloc(sizeof(double) * num_time * num_par);
 
-   cp_delay = (double*) malloc(sizeof(double)*num_time);
-   wb_delay = (double*) malloc(sizeof(double)*num_time);
-   cp_grad_delay  = (double*) malloc(sizeof(double)*num_time);
-   wb_grad_delay  = (double*) malloc(sizeof(double)*num_time);
+   // Reuse scratch across independent voxel fits on this worker thread.
+   thread_local std::vector<double> scratch;
+   scratch.resize(static_cast<size_t>(num_time) * (6 + num_par));
+   c_a = scratch.data() + (0);
+   c_t = scratch.data() + (0 + num_time);
+   s_t = scratch.data() + (0 + num_time + num_time);
+   cp_delay = scratch.data() + (0 + num_time + num_time + num_time * num_par);
+   wb_delay = scratch.data() + (0 + num_time + num_time + num_time * num_par + num_time);
+   cp_grad_delay = scratch.data() + (0 + num_time + num_time + num_time * num_par + num_time + num_time);
+   wb_grad_delay = scratch.data() + (0 + num_time + num_time + num_time * num_par + num_time + num_time + num_time);
 
    // for (i = 0; i < num_time; i++){
    //    std :: cout << "i = " << i << ", cp[i] = " << cp[i] << std :: endl;
@@ -397,8 +458,15 @@ void kconv_1tcm_jac(double *p, double dk, double *scant, double td, double *cp,
          s_t += num_time;
       }
       if (psens[1] == 1) { // Sensitivity wrt k1
-         for (i = 0; i < num_time; i++)
-            s_t[i] = (1 - vb) * c_a[i] / k1;
+         if (k1 == 0.0) {
+            // c_a is proportional to K1; c_a/K1 becomes 0/0 at the
+            // permitted zero bound. Compute the exact sensitivity there.
+            kconv_exp(1.0 - vb, a, cp_delay, num_time, td, s_t);
+         } else {
+            // Preserve the original numerical path for nonzero K1.
+            for (i = 0; i < num_time; i++)
+               s_t[i] = (1 - vb) * c_a[i] / k1;
+         }
          s_t += num_time;
       }
       if (psens[2] == 1) { // Sensitivity wrt k2
@@ -426,14 +494,7 @@ void kconv_1tcm_jac(double *p, double dk, double *scant, double td, double *cp,
       frame(scant, td, s_t, num_frm, num_par, st + j * num_frm * num_par);
    }
 
-   // Free allocated memory
-   free(c_a);
-   free(c_t);
-   free(s_t);
-   free(cp_delay);
-   free(wb_delay);
-   free(cp_grad_delay);
-   free(wb_grad_delay);
+
 }
 
 //------------------------------------------------------------------------------
@@ -486,7 +547,7 @@ void kconv_liver_tac(double *p, double dk, double *scant, double td, double *ca,
       t_delay = p[7 + j*8];
 
       k234 = k2 + k3 + k4;
-      d = sqrt(k234 * k234 - 4 * k2 * k4);
+      d = kmap_2t_separation(k2, k3, k4);
       a1 = (k234 - d) / 2;
       a2 = (k234 + d) / 2;
       // get delayed cp/wb
@@ -507,14 +568,26 @@ void kconv_liver_tac(double *p, double dk, double *scant, double td, double *ca,
       kconv_exp(1.0, tmp, cp, num_time, td, c_a2);
 
       // Calculate the concentrations
-      if (d == 0) d = 1e9;
+      // For coincident rates, the tissue response is the repeated-root
+      // limit. Retain the established evaluation path for ordinary rates.
+      if (d < 1e-5) {
+         const double beta = (d > 0.0) ? (k3 + k4 - k2) / d : 0.0;
+         const double weight1 = 0.5 * (1.0 + beta);
+         for (i = 0; i < num_time; ++i) {
+            c_f[i] = k1 * (weight1 * c_a1[i] + (1.0 - weight1) * c_a2[i]);
+            c_b[i] = 0.0;
+         }
+      } else {
       f1 = k1 / d * (k4 - a1);
       f2 = k1 / d * (a2 - k4);
       b1 = k1 / d * k3;
       b2 = -b1;
-      for (i = 0; i < num_time; i++) {
-         c_f[i] = f1 * c_a1[i] + f2 * c_a2[i];
-         c_b[i] = b1 * c_a1[i] + b2 * c_a2[i];
+         for (i = 0; i < num_time; ++i) {
+            c_f[i] = f1 * c_a1[i] + f2 * c_a2[i];
+            c_b[i] = b1 * c_a1[i] + b2 * c_a2[i];
+         }
+      }
+      for (i = 0; i < num_time; ++i) {
          c_t[i] = (1 - vb) * (c_f[i] + c_b[i]) + vb * cp[i];
       }
 
@@ -587,9 +660,18 @@ void kconv_liver_jac(double *p, double dk, double *scant, double td, double *ca,
       t_delay = p[7 + j * 8];
 
       k234 = k2 + k3 + k4;
-      d = sqrt(k234 * k234 - 4 * k2 * k4);
+      d = kmap_2t_separation(k2, k3, k4);
       a1 = (k234 - d) / 2;
       a2 = (k234 + d) / 2;
+
+      // Singular analytic coefficients at repeated roots are evaluated by
+      // finite differences of the same forward model, only at this boundary.
+      if (d < 1e-5) {
+         kmap_boundary_jacobian(kconv_liver_tac, p + j * 8, 8, psens,
+            dk, scant, td, ca, wb, num_frm,
+            ct + j * num_frm, st + j * num_frm * num_par, 6);
+         continue;
+      }
 
       // shift ca for time delay
       time_delay_tac(ca, num_time, t_delay, td, ca_delay);

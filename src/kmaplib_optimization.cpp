@@ -11,6 +11,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <vector>
+#include <algorithm>
 
 //------------------------------------------------------------------------------
 // kmap_levmar
@@ -269,6 +271,107 @@ void kmap_levmar_stats(
    pub_sens = (double*) malloc(sizeof(double) * num_par);
    st       = (double*) malloc(sizeof(double) * num_frm * num_par);
 
+   // Report irrecoverable numerical errors through the fit-status structure.
+   // Recoverable trial failures retain the previous finite estimate.
+   auto releaseWorkspace = [&]() {
+      free(f); free(fnew); free(r); free(h);
+      free(pnew); free(pest); free(plb_sens); free(pub_sens); free(st);
+   };
+   auto rejectInvalidFit = [&]() {
+      if (stx) {
+         ++stx->hit_guard;
+         stx->finite_candidate = 0;
+         stx->termination_reason = KMAP_TERMINATION_INVALID_BASELINE;
+      }
+      releaseWorkspace();
+   };
+   if (num_frm <= 0 || num_par <= 0 || !f || !fnew || !r || !h ||
+       !pnew || !pest || !plb_sens || !pub_sens || !st) {
+      rejectInvalidFit();
+      return;
+   }
+   auto finiteModel = [&](bool includeJacobian) {
+      for (int k = 0; k < num_frm; ++k)
+         if (!std::isfinite(ct[k])) return false;
+      if (includeJacobian)
+         for (int k = 0; k < num_frm * num_par; ++k)
+            if (!std::isfinite(st[k])) return false;
+      return true;
+   };
+   auto finiteParameters = [&]() {
+      for (int k = 0; k < num_par; ++k)
+         if (!std::isfinite(pnew[k])) return false;
+      return true;
+   };
+
+   // Only invoked when an analytic derivative is non-finite. A valid
+   // forward prediction need not be rejected because of a singular Jacobian.
+   // Differences respect the same parameter bounds as the optimizer.
+   auto recoverNumericalJacobian = [&]() -> bool {
+      (*func)(pinit, param, ct);
+      if (!finiteModel(false)) return false;
+      const std::vector<double> base(ct, ct + num_frm);
+      std::vector<double> plus(num_frm), minus(num_frm);
+      int column = 0;
+      for (int k = 0; k < num_p; ++k) {
+         if (psens[k] != 1) continue;
+         const double original = pinit[k];
+         const double step = 1e-6 * std::max(1.0, std::fabs(original));
+         const bool canPlus = original + step <= pub[k];
+         const bool canMinus = original - step >= plb[k];
+         if (canPlus) {
+            pinit[k] = original + step;
+            (*func)(pinit, param, plus.data());
+         }
+         if (canMinus) {
+            pinit[k] = original - step;
+            (*func)(pinit, param, minus.data());
+         }
+         pinit[k] = original;
+         for (int t = 0; t < num_frm; ++t) {
+            const double derivative = canMinus && canPlus
+               ? (plus[t] - minus[t]) / (2.0 * step)
+               : (canPlus ? (plus[t] - base[t]) / step
+                          : (canMinus ? (base[t] - minus[t]) / step : 0.0));
+            st[t + column * num_frm] = derivative;
+         }
+         ++column;
+      }
+      std::copy(base.begin(), base.end(), ct);
+      if (stx) ++stx->numerical_jacobian_fallbacks;
+      return finiteModel(true);
+   };
+
+   // A mathematical existence guarantee presupposes a nonempty finite box
+   // and a finite objective. Enforce that contract before model evaluation.
+   bool positiveWeight = false;
+   for (int t = 0; t < num_frm; ++t) {
+      if (!std::isfinite(y[t]) || !std::isfinite(w[t]) || w[t] < 0.0) {
+         rejectInvalidFit();
+         return;
+      }
+      positiveWeight = positiveWeight || (w[t] > 0.0);
+   }
+   if (!positiveWeight) {
+      rejectInvalidFit();
+      return;
+   }
+   for (int k = 0; k < num_p; ++k) {
+      if (!std::isfinite(pinit[k])) {
+         rejectInvalidFit();
+         return;
+      }
+      if (psens[k] == 1) {
+         if (!std::isfinite(plb[k]) || !std::isfinite(pub[k]) || plb[k] > pub[k]) {
+            rejectInvalidFit();
+            return;
+         }
+         const double bounded = std::max(plb[k], std::min(pub[k], pinit[k]));
+         if (bounded != pinit[k] && stx) ++stx->clamped_initial_parameters;
+         pinit[k] = bounded;
+      }
+   }
+
    // Initialize
    getkin(pinit, psens, num_par, pest);
    getkin(plb, psens, num_par, plb_sens);
@@ -279,7 +382,13 @@ void kmap_levmar_stats(
    //   std :: cout <<"Before initial jacobian " <<  i << " - ct[i] = " << ct[i] << std :: endl;
    // }
    (*jacf)(pinit, param, ct, psens, st);
-   if (stx && kmap_isnan(st[0])) stx->nan_st++;
+   if (!finiteModel(true)) {
+      if (stx) ++stx->nan_st;
+      if (!recoverNumericalJacobian()) {
+         rejectInvalidFit();
+         return;
+      }
+   }
 
    // std :: cout << "num_frm = " << num_frm << std :: endl;
    for (i = 0; i < num_frm; i++) {
@@ -303,8 +412,23 @@ void kmap_levmar_stats(
          maxaii = tmp;
    }
    // std :: cout << "maxaii = " << maxaii << std :: endl;
-   mu = tau * maxaii;
+   mu = std::max(1e-14, tau * maxaii);
+   if (!std::isfinite(F) || !std::isfinite(mu)) {
+      rejectInvalidFit();
+      return;
+   }
+   if (stx) stx->finite_candidate = 1;
    // std :: cout << "mu = " << mu << std :: endl;
+
+   // A failed trial is not necessarily an unsuccessful fit. Retain the
+   // last finite accepted parameters and increase damping before retrying.
+   auto rejectTrial = [&]() {
+      if (stx) ++stx->it_reject;
+      mu *= v;
+      v *= 2.0;
+      ++n;
+      return std::isfinite(mu) && std::isfinite(v) && n <= 1000;
+   };
 
    it = 0; n = 0;
    // std :: cout << "etol = " << etol << std :: endl;
@@ -318,6 +442,10 @@ void kmap_levmar_stats(
 
       // Coordinate descent step
       boundpls_cd(f, w, st, mu, num_frm, num_par, plb_sens, pub_sens, subit, pnew, r);
+      if (!finiteParameters()) {
+         if (!rejectTrial()) break;
+         continue;
+      }
 
       // h = pnew - pest
       for (i = 0; i < num_par; i++) {
@@ -326,34 +454,70 @@ void kmap_levmar_stats(
       // std :: cout << "vecnorm2(h, num_par) = " << vecnorm2(h, num_par) << std :: endl;
       // std :: cout << "vecnorm2(pest, num_par) = " << vecnorm2(pest, num_par) << std :: endl;
       if (vecnorm2(h, num_par) <= etol * (vecnorm2(pest, num_par) + etol)) {
-        // std :: cout << "first break" << std :: endl;
+        if (stx) {
+           stx->converged = 1;
+           stx->termination_reason = KMAP_TERMINATION_SMALL_STEP;
+        }
         break;
       }
 
       // Evaluate new parameters
       setkin(pnew, num_par, psens, pinit);
       (*func)(pinit, param, ct);
-      if (stx && kmap_isnan(ct[0])) stx->nan_ct++;
+      if (!finiteModel(false)) {
+         if (stx) ++stx->nan_ct;
+         if (!rejectTrial()) break;
+         continue;
+      }
 
       for (i = 0; i < num_frm; i++)
          fnew[i] = y[i] - ct[i];
 
       Fnew = vecnormw(w, fnew, num_frm) * 0.5;
       Lnew = vecnormw(w, r, num_frm) * 0.5;
-      rho  = (F - Fnew) / (F - Lnew);
+      const double predictedReduction = F - Lnew;
+      if (!std::isfinite(Fnew) || !std::isfinite(Lnew) ||
+          !std::isfinite(predictedReduction)) {
+         if (!rejectTrial()) break;
+         continue;
+      }
+      if (predictedReduction <= 1e-14 * std::max(1.0, F)) {
+         // No numerically meaningful predicted improvement. Keep the best
+         // finite estimate instead of turning an optimizer stall into failure.
+         if (stx) stx->termination_reason = KMAP_TERMINATION_NEGLIGIBLE_IMPROVEMENT;
+         break;
+      }
+      rho = (F - Fnew) / predictedReduction;
+      if (!std::isfinite(rho)) {
+         if (!rejectTrial()) break;
+         continue;
+      }
 
       if (stx) { stx->last_rho = rho; stx->last_mu = mu; }
 
       if (rho > 0) {
-         if (stx) stx->it_accept++;
-
          for (j = 0; j < num_par; j++) {
             pest[j] = pnew[j];
          }
 
          (*jacf)(pinit, param, ct, psens, st);
-         if (stx && kmap_isnan(st[0])) stx->nan_st++;
+         if (!finiteModel(true)) {
+            if (stx) ++stx->nan_st;
+            if (!recoverNumericalJacobian()) {
+               // Roll back only if neither derivative evaluation is usable.
+               for (j = 0; j < num_par; ++j) pest[j] -= h[j];
+               setkin(pest, num_par, psens, pinit);
+               (*jacf)(pinit, param, ct, psens, st);
+               if (!finiteModel(true) && !recoverNumericalJacobian()) {
+                  rejectInvalidFit();
+                  return;
+               }
+               if (!rejectTrial()) break;
+               continue;
+            }
+         }
 
+         if (stx) ++stx->it_accept;
          for (i = 0; i < num_frm; i++) {
             f[i] = fnew[i];
          }
@@ -367,29 +531,25 @@ void kmap_levmar_stats(
          mu *= tmp;
          v = 2.0;
       } else {
-         if (stx) stx->it_reject++;
-         mu *= v;
-         v *= 2.0;
+         if (!rejectTrial()) break;
+         continue;
       }
-
       ++n;
-      if (n > 1000) {
-         if (stx) stx->hit_guard++;
-
-         setkin(pest, num_par, psens, pinit);
-         (*func)(pinit, param, ct);
-         if (stx && kmap_isnan(ct[0])) stx->nan_ct++;
-         break;
-      }
+      if (!std::isfinite(mu) || !std::isfinite(v) || n > 1000) break;
    }
 
-   free(f);
-   free(fnew);
-   free(r);
-   free(h);
-   free(pnew);
-   free(pest);
-   free(plb_sens);
-   free(pub_sens);
-   free(st);
+   if (stx && stx->termination_reason == KMAP_TERMINATION_UNKNOWN)
+      stx->termination_reason = (it >= maxit)
+         ? KMAP_TERMINATION_ITERATION_LIMIT : KMAP_TERMINATION_STALLED;
+
+   // Ensure outputs reflect the last accepted, finite parameter vector,
+   // not a rejected trial that happened to be evaluated immediately before exit.
+   setkin(pest, num_par, psens, pinit);
+   (*func)(pinit, param, ct);
+   if (!finiteModel(false)) {
+      if (stx) ++stx->nan_ct;
+      rejectInvalidFit();
+      return;
+   }
+   releaseWorkspace();
 }
