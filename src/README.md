@@ -1,77 +1,71 @@
-# OpenKMAP-C Source Files
+# KMAP-CPP source files
 
-The `src` folder contains the core C++ source code files used to define and implement the kinetic models, input functions, optimization routines, and utility functions. These files may compiled and integrated with other high-level languages, such as the MEX functions to allow for MATLAB integration.
+The `src/` directory contains the numerical C++ implementation of the **KMAP-CPP** tracer kinetic-modeling library. It derives from the upstream [KMAP-C Toolkit](https://github.com/ShareKM/KMAP-C) and is built as part of the reusable `kmap` shared library by the root [CMakeLists.txt](../CMakeLists.txt).
 
-## Source Files
+Unlike the MATLAB MEX gateways, the core numerical library can be built and used **without MATLAB, Python, or 3D Slicer**. Public headers are located under `../include/`, and additional C++ headers under `../hpp/`.
 
-1. **`kmaplib_common.cpp`**:
-   - **Purpose**: Contains common utility functions used across different models and optimization routines.
-   - **Key Functions**:
-     - **Convolution Operations**:
-       - `kconv_exp`: Convolution of an input function with a single exponential, a key component in compartmental models.
-     - **Other Utility Functions**:
-       - `frame`: Computes average activity within specified time frames.
-       - `vecnorm2`, `vecnormw`: Helper functions for vector norm calculations.
-     - **Parameter Handling**:
-       - `setkin`, `getkin`: Functions for defining and handling sensitive parameters during optimization.
+## Main implementation files
 
-2. **`kmaplib_infun.cpp`**:
-   - **Purpose**: Contains the routines used for processing the input function.
-   - **Key Functions**:
-     - **Time Delay Correction**:
-       - `time_delay_tac`: Computes time-delayed TAC curves by shifting the TAC in time.
-       - `time_delay_jac`: Computes the Jacobian for time delay correction.
+| File | Responsibility |
+| --- | --- |
+| `kmaplib_common.cpp` | Common numerical functions, frame averaging, exponential convolution, vector norms, and parameter-selection helpers. |
+| `kmaplib_infun.cpp` | Input-function utilities, including temporal delay of curves and delay-related sensitivity calculations. |
+| `kmaplib_models.cpp` | TAC and Jacobian calculations for supported one-tissue, two-tissue, and liver kinetic models. |
+| `kmaplib_optimization.cpp` | Model fitting and optimization, including Levenberg-Marquardt algorithms and bounded coordinate-descent steps. |
+| `kmodels.cpp` | Higher-level kinetic-model definitions and implementation support. |
+| `cmd.cpp` | Command-line interface support used by the standalone implementation. |
+| `parse_args.cpp` | Argument-parsing implementation. |
+| `utils.cpp` | Shared implementation utilities. |
 
-3. **`kmaplib_models.cpp`**: 
-   - **Purpose**: Contains the implementations of TAC (Time-Activity Curve) and Jacobian calculations for the various kinetic models.
-   - **Key Functions**:
-     - **TAC Evaluation**:
-       - `tac_eval`: Computes TACs for given model parameters.
-       - `kconv_1tcm_tac`, `kconv_2tcm_tac`, `kconv_liver_tac`: Specialized TAC computation functions for the respective models.
-     - **Jacobian Calculation**:
-       - `jac_eval`: Computes the Jacobian matrix for TACs with respect to the kinetic parameters.
-       - `kconv_1tcm_jac`, `kconv_2tcm_jac`, `kconv_liver_jac`: Specialized Jacobian calculation functions.
+For complete function declarations and parameter types, see the public headers, especially [`../include/kmaplib.h`](../include/kmaplib.h).
 
-4. **`kmaplib_optimization.cpp`**:
-   - **Purpose**: Contains the optimization routines used in the library, including the Levenberg-Marquardt algorithm.
-   - **Key Functions**:
-     - **Optimization**:
-       - `kmap_levmar`: Levenberg-Marquardt (LM) algorithm for optimizing model parameters to fit TAC data.
-       - `boundpls_cd`: Bounded coordinate descent for quadratic optimization with constraints. This is used in the LM algorithm.
+## Core numerical routines
 
-## Optimization Methods Used
+### Convolution and frame averaging
 
-The KMAP library employs several advanced optimization techniques to accurately fit kinetic models to time-activity curve (TAC) data derived from PET imaging.
+- `kconv_exp(...)`: exponential convolution used in compartment model evaluations.
+- `frame(...)`: average modeled activity across specified PET frame intervals.
+- `vecnorm2(...)` and `vecnormw(...)`: unweighted/weighted vector norm helpers.
+- `setkin(...)` and `getkin(...)`: select and update fitted parameters.
 
-1. **Levenberg-Marquardt Algorithm**:
-   - **Purpose**: The Levenberg-Marquardt (LM) algorithm is a widely used classic optimization method for solving nonlinear least squares problems, particularly in the context of time activity curve (TAC) fitting. In kinetic modeling, it plays a crucial role in estimating the model parameters so that the computed TAC closely matches the measured TAC data. The algorithm effectively bridges the gap between the steepest descent method and the Gauss-Newton algorithm, providing a balanced approach that is both robust and efficient.
-   
-   - **How It Works**: 
-     - The LM algorithm iteratively updates the parameters by minimizing the sum of the squared differences between the observed and model-predicted TAC values. It combines the advantages of two methods: 
-       - **Gradient Descent**: Useful when the parameters are far from their optimal values, where it uses the gradient of the cost function to guide the search direction.
-       - **Gauss-Newton**: More effective when the parameters are close to the optimal values, using a second-order approximation of the cost function to make more precise adjustments.
-     - The LM algorithm introduces a damping factor that adjusts the step size based on the current position in the parameter space. When far from the minimum, the algorithm behaves more like a gradient descent (larger damping), and as it approaches the minimum, it shifts towards the Gauss-Newton method (smaller damping).
+These are implemented in `kmaplib_common.cpp`.
 
-   - **Implementation**: 
-     - In `kmaplib_optimization.cpp`, the LM algorithm is implemented through the `kmap_levmar` function. This function takes in the initial parameter estimates and iteratively refines them by minimizing the residuals (differences between measured and predicted TACs). 
-     - To handle the complexity of multiple parameter constraints, the algorithm also uses a bounded coordinate descent method for solving the intermediate quadratic optimization problem, which ensures that parameter updates stay within specified bounds, improving the stability and reliability of the optimization process.
-     - The `kmap_levmar` function also incorporates mechanisms to dynamically adjust the damping factor, improving convergence speed and accuracy. The function iteratively recalculates the Jacobian matrix, which represents the sensitivity of the TAC to each model parameter, ensuring that the parameter updates are optimally directed.
+### Input-function time delay
 
-2. **Bounded Coordinate Descent**:
-   - **Purpose**: This method uses a coordinate descent optimization strategy to solve the intermediate quadratic optimization problem during the LM optimization. It is particularly effective in situations where the parameters are subject to specific constraints (bounds). 
-   
-   - **Implementation**: In `kmaplib_optimization.cpp`, the `boundpls_cd` function performs this optimization, iterating over each parameter to minimize the quadratic cost function under the constraints of the parameter bounds. This ensures that the optimization process remains stable and that the parameter estimates are physically meaningful.
+- `time_delay_tac(...)`: shift a sampled curve by a specified delay.
+- `time_delay_jac(...)`: compute delay-related sensitivity information.
 
-3. **Convolution of an Exponential Function and Input Function**:
-   - **Purpose**: Convolution of a single exponential function and the blood input function is a building block for the calculation of the analytical solution for different compartmental models.
-   
-   - **Implementation**: The `kconv_exp` function in `kmaplib_common.cpp` efficiently handles the numerical calculation of the convolution for computing the model TACs and their sensitivities concerning different model parameters. This operation directly influences the accuracy of the model fitting process, as it underpins the evaluation of how well the model's predictions align with the observed data.
+These are implemented in `kmaplib_infun.cpp`.
 
-These optimization and modeling techniques are integral to the KMAP library's ability to accurately model time activity curves in dynamic PET. By employing a combination of the Levenberg-Marquardt algorithm, bounded coordinate descent, and convolution operations, the library ensures robust and reliable parameter estimation, facilitating meaningful insights into tracer kinetics.
+### Model evaluation and Jacobians
 
-## Compilation
+- `tac_eval(...)` and `jac_eval(...)`: dispatch model evaluation and sensitivity calculations.
+- `kconv_1tcm_tac(...)` / `kconv_1tcm_jac(...)`: 1TCM TAC and Jacobian.
+- `kconv_2tcm_tac(...)` / `kconv_2tcm_jac(...)`: 2TCM TAC and Jacobian.
+- `kconv_liver_tac(...)` / `kconv_liver_jac(...)`: liver-model TAC and Jacobian.
 
-To compile these files for integration with MATLAB, use the MATLAB `mex` command from within the `mex` folder.
+These routines are implemented in `kmaplib_models.cpp` and use the common convolution and input-function utilities.
 
-Refer to the detailed compilation instructions in `mex/README.md`
+### Optimization
 
+- `kmap_levmar(...)`: Levenberg-Marquardt-based parameter fitting.
+- `boundpls_cd(...)`: bounded coordinate-descent routine used for constrained updates.
+
+These are implemented in `kmaplib_optimization.cpp`. Optimization convergence and parameter identifiability depend on the model, frame timing, weighting, starting values, and parameter bounds; fitting success should be verified independently.
+
+## Building
+
+For the standalone C++ library, use the root [README.md](../README.md) and `CMakeLists.txt`:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOMP=OFF
+cmake --build build --parallel
+```
+
+Run these commands from the **repository root**, not from `src/`.
+
+For the MATLAB gateways, use the corresponding instructions in [../mex/README.md](../mex/README.md). The MEX sources compile selected files from this directory and require the public header include path **`../include/`**. The core KMAP-CPP library itself does not require MATLAB.
+
+## Upstream attribution and license
+
+KMAP-CPP preserves the original KMAP-C licensing and contributor attribution. See the repository root [CONTRIBUTORS.md](../CONTRIBUTORS.md) and [LICENSE](../LICENSE). The code is research software; independent numerical and scientific validation remains necessary for each intended application.

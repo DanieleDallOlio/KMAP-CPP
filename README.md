@@ -2,180 +2,148 @@
 
 ## Overview
 
-**KMAP-CPP** is a C++ tracer kinetic modeling library derived from the
-[Open KMAP-C Toolkit](https://github.com/ShareKM/KMAP-C), developed as part
-of the Open Kinetic Modeling Initiative.
+**KMAP-CPP** is a standalone C++ tracer kinetic-modeling library derived from the open-source [KMAP-C Toolkit](https://github.com/ShareKM/KMAP-C), developed within the broader [Open Kinetic Modeling Initiative](https://www.openkmi.org/).
 
-The original **Kinetic Modeling and Analysis Package (KMAP)** is an open-source
-software environment for implementing and applying tracer kinetic models to
-dynamic positron emission tomography (PET) data. The project was initially
-developed at the University of California, Davis, and subsequently released as
-open-source software to support the
-[Open Kinetic Modeling Initiative](https://www.openkmi.org/).
+The original Kinetic Modeling and Analysis Package (KMAP) provided numerical tools for interpreting dynamic positron emission tomography (PET) data. KMAP-CPP retains and extends its C/C++ modeling foundation in a reusable library that can be built independently or used by [SlicerDynamicPET](https://github.com/DanieleDallOlio/SlicerDynamicPET).
 
-KMAP-CPP builds upon the original KMAP-C implementation while maintaining a
-standalone C++ library that can also serve as the kinetic-modeling backend of
-[SlicerDynamicPET](https://github.com/DanieleDallOlio/SlicerDynamicPET).
+**KMAP-CPP is a derivative of KMAP-C, not an unrelated reimplementation.** Original upstream authorship, copyright, and MIT licensing are retained; see [CONTRIBUTORS.md](CONTRIBUTORS.md) and [LICENSE](LICENSE).
 
-## Relationship to KMAP-C
+## What this repository provides
 
-KMAP-CPP is a fork and derivative of the
-[ShareKM/KMAP-C](https://github.com/ShareKM/KMAP-C) project.
+- A **shared C++ library** for supported PET tracer kinetic-model calculations and fitting.
+- Input-function sampling and numerical convolution utilities.
+- One-tissue, two-tissue, and liver kinetic-model routines inherited and adapted from the KMAP-C codebase.
+- Numerical optimization tools, including Levenberg-Marquardt methods and bounded updates.
+- Optional **OpenMP** compilation for supported computational paths.
+- Standalone C++ examples and reference data.
+- Source and legacy precompiled **MATLAB MEX** interfaces kept in a separate `mex/` directory.
+- CMake build-tree and installable package support, including the `KMAP::kmap` target.
 
-KMAP-C provides the original C/C++ implementations of core functionality for
-dynamic PET kinetic modeling, including:
+The core library does **not** require MATLAB, Python, or 3D Slicer to build. Slicer-specific UI, MRML/DICOM integration, segmentation processing, visualization, and clinical workflow choices are implemented in the parent SlicerDynamicPET project, not in KMAP-CPP.
 
-- input-function processing;
-- tracer kinetic models;
-- optimization algorithms;
-- utility functions;
-- voxel-wise kinetic modeling and OpenMP-based acceleration.
+## Building the standalone C++ library
 
-KMAP-CPP retains and extends this foundation with modifications developed for
-standalone C++ use and integration with SlicerDynamicPET.
+### Requirements
 
-The upstream KMAP-C project remains the source and reference for the original
-KMAP implementation. KMAP-CPP is independently maintained as a derivative of
-that project.
+- A **C++17-compatible compiler**.
+- **CMake** and a supported native build system.
+- Optional OpenMP development/runtime support for accelerated builds.
 
-## KMAP-CPP
+By default the standalone project builds the examples and enables installation/export targets. You can explicitly disable them for embedding or library-only builds.
 
-The goal of KMAP-CPP is to provide a reusable C++ kinetic-modeling backend
-without requiring MATLAB, Python, or 3D Slicer.
+### Build without OpenMP
 
-The library can be:
-
-- built and used as a standalone C++ library;
-- linked from other CMake projects;
-- used for voxel-wise kinetic modeling with OpenMP acceleration;
-- used as the computational kinetic-modeling backend of SlicerDynamicPET.
-
-The current implementation includes extensions and modifications to the
-upstream KMAP-C codebase, including changes to the build system, numerical and
-optimization routines, utilities, and functionality required for efficient
-voxel-wise parametric imaging.
-
-## Building
-
-KMAP-CPP requires a C++17-compatible compiler and CMake.
-
-A standard Release build can be configured with:
+From the repository root:
 
 ```bash
-cmake \
-  -S . \
-  -B build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DOMP=OFF
-```
-
-and built with:
-
-```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOMP=OFF
 cmake --build build --parallel
 ```
 
-### OpenMP
-
-OpenMP acceleration can be enabled with:
+For multi-configuration generators such as Visual Studio, select the configuration when building:
 
 ```bash
-cmake \
-  -S . \
-  -B build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DOMP=ON
+cmake --build build --config Release --parallel
 ```
 
-followed by:
+### Build with OpenMP
 
 ```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOMP=ON
 cmake --build build --parallel
 ```
 
-## Installation
+Setting `OMP=ON` makes compatible OpenMP support **required** by the KMAP-CPP CMake configuration. Install/configure an OpenMP-capable compiler and runtime first. For example, Apple Clang systems may require a separately supplied OpenMP runtime and suitable compiler configuration. If OpenMP is unavailable, configure with `OMP=OFF` instead.
 
-KMAP-CPP provides CMake package configuration and pkg-config metadata.
-
-For example:
+### Build the library without the examples
 
 ```bash
-cmake \
-  -S . \
-  -B build \
-  -DCMAKE_BUILD_TYPE=Release \
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DKMAP_BUILD_EXAMPLES=OFF -DKMAP_INSTALL=OFF -DOMP=OFF
+cmake --build build --parallel
+```
+
+`KMAP_BUILD_EXAMPLES` and `KMAP_INSTALL` default to `ON` for a standalone build and to `OFF` when KMAP-CPP is added as a subdirectory of another project. The embedding project can override these settings as needed.
+
+## Installing and using KMAP-CPP from CMake
+
+For a standalone install:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
   -DKMAP_INSTALL=ON \
   -DCMAKE_INSTALL_PREFIX=/path/to/install
-
 cmake --build build --parallel
 cmake --install build
 ```
 
-An installed KMAP-CPP library can then be consumed from another CMake project
-using:
+An installed consumer can then use:
 
 ```cmake
 find_package(KMAP REQUIRED CONFIG)
 
-target_link_libraries(
-  my_application
-  PRIVATE
-    KMAP::kmap
-)
+target_link_libraries(my_application PRIVATE KMAP::kmap)
 ```
 
-## Examples and data
+Make the installation prefix discoverable to CMake, for example by setting `CMAKE_PREFIX_PATH` when configuring the consuming project. The project also generates `pkg-config` metadata when installation is enabled.
 
-Example applications for the one-tissue and two-tissue compartment models are
-provided in the `example/` directory.
+## Examples and reference data
 
-Example/reference data used by the standalone implementations are available in
-the `data/` directory.
+The `example/` directory provides standalone examples for the **one-tissue** and **two-tissue** compartment models. Associated demonstration/reference data are in `data/`.
 
-Examples can be disabled when KMAP-CPP is embedded into another project:
+```text
+example/
+|-- demo_1tcm_realdata.cpp
+`-- demo_2tcm_realdata.cpp
 
-```bash
--DKMAP_BUILD_EXAMPLES=OFF
+data/
+|-- demo_1tcm_realdata/
+`-- demo_2tcm_realdata/
 ```
 
-## MATLAB/MEX sources
+These examples exercise the standalone C++ modeling code. They do not establish validation for arbitrary clinical tracer and acquisition combinations.
 
-The repository retains MATLAB/MEX-related source material inherited from or
-derived from the KMAP ecosystem in the `mex/` directory.
+## Repository layout
 
-The core KMAP-CPP library itself is intended to remain independent of MATLAB.
+```text
+KMAP-CPP/
+|-- CMakeLists.txt
+|-- CMake package / pkg-config template files
+|-- CONTRIBUTORS.md
+|-- LICENSE
+|-- README.md
+|-- include/        # Public C++ headers, including kmaplib.h
+|-- hpp/            # Additional C++ headers
+|-- src/            # Kinetic model, numerical, and utility implementations
+|-- example/        # Standalone C++ demonstrations
+|-- data/           # Example/reference data
+`-- mex/            # MATLAB MEX sources and legacy precompiled binaries
+```
 
-## SlicerDynamicPET
+For a more detailed overview of the implementation, see [src/README.md](src/README.md). For MATLAB-specific interfaces and platform caveats, see [mex/README.md](mex/README.md).
 
-KMAP-CPP is used as the kinetic-modeling backend of
-[SlicerDynamicPET](https://github.com/DanieleDallOlio/SlicerDynamicPET), a
-3D Slicer extension for dynamic PET analysis, ROI kinetic modeling, and
-voxel-wise parametric imaging.
+## MATLAB and MEX support
 
-SlicerDynamicPET-specific functionality, including its graphical user
-interface, MRML integration, image handling, and visualization, is maintained
-separately from this library.
+The repository retains MEX source code and precompiled binaries inherited from and developed within the KMAP ecosystem. These are **separate from the CMake-built core library**.
+
+Binaries are included for supported Windows, Linux, and both Intel/Apple Silicon macOS MATLAB MEX formats where present. Compatibility depends on the installed MATLAB release, machine architecture, and compiler/runtime libraries; source recompilation may be necessary. Refer to [mex/README.md](mex/README.md) for the available interfaces and instructions.
+
+## Integration with SlicerDynamicPET
+
+SlicerDynamicPET includes KMAP-CPP as a **pinned Git submodule** and builds it through `add_subdirectory(KMAP-CPP)`. The parent extension configures the backend's optional OpenMP setting based on whether OpenMP was found in the Slicer build environment. It also disables standalone examples and standalone package installation for its embedded build.
+
+Code using KMAP-CPP should distinguish the numerical kernel from the application-level decisions made by SlicerDynamicPET, such as PET timing validation, input-function coverage, voxel selection, fitted model choices, and DICOM export.
+
+## Scientific use and validation
+
+Kinetic-model results depend on the selected model, biological assumptions, frame timing, input function, units, decay correction, starting parameters, optimization settings, and measurement noise. This library is **research software**; downstream users should independently validate results for each intended workflow.
 
 ## Upstream project and attribution
 
-KMAP-CPP is based on the open-source
-[KMAP-C Toolkit](https://github.com/ShareKM/KMAP-C).
+KMAP-CPP is based on the [Open KMAP-C Toolkit](https://github.com/ShareKM/KMAP-C). The original KMAP work was developed at the University of California, Davis and subsequently released as open-source software supporting the Open Kinetic Modeling Initiative.
 
-The original KMAP project was developed at the University of California,
-Davis, and released to support the
-[Open Kinetic Modeling Initiative](https://www.openkmi.org/).
-
-Original KMAP-C authorship and contributions are retained and acknowledged.
-See [CONTRIBUTORS](CONTRIBUTORS.md) for contributor information.
-
-Users of KMAP-CPP are encouraged to also consult and acknowledge the original
-KMAP-C project where appropriate.
+Original KMAP-C copyright, authorship, and contributions are preserved and acknowledged. Please consult [CONTRIBUTORS.md](CONTRIBUTORS.md) and cite the original KMAP publications and model-methodology literature where appropriate.
 
 ## License
 
-KMAP-CPP is distributed under the MIT License, consistent with the upstream
-KMAP-C project.
-
-The original copyright and license notices from KMAP-C are retained.
-
-See [LICENSE](LICENSE) for details.
+KMAP-CPP is distributed under the **MIT License**, consistent with upstream KMAP-C. See [LICENSE](LICENSE).
